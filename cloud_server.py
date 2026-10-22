@@ -94,22 +94,7 @@ def update_cloud_trust(edge_id: str, success: bool) -> float:
         "window": cloud_time_window(),
     })
     if len(node["history"]) > HISTORY_SIZE:
-            data_logs.insert(0, accepted_record)
-    if len(data_logs) > MAX_LOGS:
-        data_logs.pop()
-
-    # Keep the accepted record associated with the highest cloud trust.
-    # Equal scores leave the existing best record unchanged.
-    if (
-        best_edge_record is None
-        or current_trust > float(best_edge_record.get("cloud_trust", 0.0))
-    ):
-        best_edge_record = dict(accepted_record)
-
-    print(
-        f"[CLOUD ACCEPTED] {timestamp} | {edge_id} | "
-        f"trust={current_trust:.3f} | direct={direct_trust:.3f} | "
-        f"pitch={data.get('smoothed_pitch', data.get('pitch'))} | "
+                f"pitch={data.get('smoothed_pitch', data.get('pitch'))} | "
         f"roll={data.get('smoothed_roll', data.get('roll'))} | "
         f"anomaly={data.get('anomaly')} | reason={data.get('reason')}"
     )
@@ -222,3 +207,4 @@ async def view_logs():
     </table>
 </body>
 </html>"""
+    return HTMLResponse(content=page)
