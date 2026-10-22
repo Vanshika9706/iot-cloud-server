@@ -1,29 +1,28 @@
-    timestamp = datetime.now(timezone.utc).isoformat()
-    data["server"] = edge_id
-    data["cloud_trust"] = round(current_trust, 3)
-    data["cloud_direct_trust"] = round(direct_trust, 3)
-    data["cloud_interactions"] = edge_trust[edge_id]["count"]
-    data["log_time"] = timestamp
-    data["cloud_validation"] = reason
+timestamp = datetime.now(timezone.utc).isoformat()
+data["server"] = edge_id
+data["cloud_trust"] = round(current_trust, 3)
+data["cloud_direct_trust"] = round(direct_trust, 3)
+data["cloud_interactions"] = edge_trust[edge_id]["count"]
+data["log_time"] = timestamp
+data["cloud_validation"] = reason
 
     # Reject invalid/corrupted data and low-trust sources.
-    if not valid:
-        print(f"REJECTED {edge_id}: {reason}; cloud trust={current_trust:.3f}")
-        raise HTTPException(
-            status_code=422,
-            detail={
+if not valid:
+    print(f"REJECTED {edge_id}: {reason}; cloud trust={current_trust:.3f}")
+    raise HTTPException(
+        status_code=422,
+        detail={
                 "status": "rejected_invalid_data",
                 "edge_id": edge_id,
                 "reason": reason,
                 "cloud_trust": round(current_trust, 3),
             },
         )
-
-    if current_trust < TRUST_THRESHOLD:
-        print(f"REJECTED {edge_id}: trust {current_trust:.3f} < {TRUST_THRESHOLD}")
-        raise HTTPException(
-            status_code=403,
-            detail={
+if current_trust < TRUST_THRESHOLD:
+    print(f"REJECTED {edge_id}: trust {current_trust:.3f} < {TRUST_THRESHOLD}")
+    raise HTTPException(
+        status_code=403,
+        detail={
                 "status": "rejected_low_trust",
                 "edge_id": edge_id,
                 "cloud_trust": round(current_trust, 3),
