@@ -94,7 +94,167 @@ def update_cloud_trust(edge_id: str, success: bool) -> float:
         "window": cloud_time_window(),
     })
     if len(node["history"]) > HISTORY_SIZE:
-                f"pitch={data.get('smoothed_pitch', data.get('pitch'))} | "
+        node["history"].pop(0)
+
+    return node["T"]
+
+
+def normalise_edge_id(value: Any) -> str:
+    """Accept edge1, Edge1, edge_1, edge-1, etc."""
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip().lower().replace("_", "").replace("-", "").replace(" ", "")
+    if cleaned.startswith("edge") and cleaned[4:].isdigit():
+        return "edge" + cleaned[4:]
+    return ""
+
+
+def numeric_angle(data: dict[str, Any], primary: str, alternate: str) -> float | None:
+    value = data.get(primary, data.get(alternate))
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def validate_report(data: dict[str, Any]) -> tuple[bool, str]:
+    """Validate fields before an accepted report can become the best record."""
+    if data.get("corrupt", False) is True:
+        return False, "corrupt_flag"
+
+    pitch = numeric_angle(data, "smoothed_pitch", "pitch")
+    roll = numeric_angle(data, "smoothed_roll", "roll")
+
+    if pitch is None:
+        return False, "missing_or_invalid_pitch"
+    if roll is None:
+        return False, "missing_or_invalid_roll"
+    if abs(pitch) > ANGLE_LIMIT:
+        return False, "pitch_out_of_range"
+    if abs(roll) > ANGLE_LIMIT:
+        return False, "roll_out_of_range"
+
+    return True, "valid"
+
+
+@app.get("/")
+async def root():
+    return {
+        "service": "Independent Edge Trust Gatekeeper",
+        "status": "online",
+        "endpoints": ["/ping", "/trust", "/best", "/records", "/logs", "/docs"],
+    }
+
+
+@app.get("/ping")
+async def ping():
+    return {"status": "cloud_online"}
+
+
+@app.post("/cloud/log")
+@app.post("/cloud/analyze")  # Compatibility with the earlier edge forwarding code
+async def log_data(request: Request):
+    global best_edge_record
+
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be a JSON object")
+
+    # Accept both payload shapes:
+    # 1) Direct: {"server": "edge1", "smoothed_pitch": ..., "smoothed_roll": ...}
+    # 2) Earlier forwarding helper: {"source_edge": "edge1", "edge_result": {...}}
+    if isinstance(data.get("edge_result"), dict):
+        edge_result = data["edge_result"]
+        source = data.get("source_edge", data.get("server", ""))
+        merged_data = dict(edge_result)
+        # Keep any outer metadata not already provided by the result.
+        for key, value in data.items():
+            if key != "edge_result" and key not in merged_data:
+                merged_data[key] = value
+        data = merged_data
+        data["server"] = source
+    elif "server" not in data and "source_edge" in data:
+        data["server"] = data["source_edge"]
+
+    edge_id = normalise_edge_id(data.get("server", ""))
+    if edge_id not in edge_trust:
+        raise HTTPException(
+            status_code=400,
+            detail="Unknown edge server. Send server/source_edge='edge1' through 'edge6'.",
+        )
+
+    valid, reason = validate_report(data)
+
+    # Update cloud trust from the cloud's own validation result.
+    # This happens before the acceptance threshold is checked.
+    current_trust = update_cloud_trust(edge_id, valid)
+    direct_trust = compute_direct_trust(edge_trust[edge_id])
+    timestamp = utc_now().isoformat()
+
+    # Add cloud-side metadata to the received record.
+    data["server"] = edge_id
+    data["cloud_trust"] = round(current_trust, 3)
+    data["cloud_direct_trust"] = round(direct_trust, 3)
+    data["cloud_interactions"] = edge_trust[edge_id]["count"]
+    data["log_time"] = timestamp
+    data["cloud_validation"] = reason
+
+    # Reject invalid reports. Their failed interaction still affects trust,
+    # but the invalid telemetry itself is not added to accepted data_logs.
+    if not valid:
+        print(
+            f"[CLOUD REJECTED] {timestamp} | {edge_id} | "
+            f"reason={reason} | trust={current_trust:.3f}"
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "status": "rejected_invalid_data",
+                "edge_id": edge_id,
+                "reason": reason,
+                "cloud_trust": round(current_trust, 3),
+            },
+        )
+
+    if current_trust < TRUST_THRESHOLD:
+        print(
+            f"[CLOUD REJECTED] {timestamp} | {edge_id} | "
+            f"trust={current_trust:.3f} below {TRUST_THRESHOLD}"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "status": "rejected_low_trust",
+                "edge_id": edge_id,
+                "cloud_trust": round(current_trust, 3),
+            },
+        )
+
+    # Store accepted telemetry in memory.
+    accepted_record = dict(data)
+    data_logs.insert(0, accepted_record)
+    if len(data_logs) > MAX_LOGS:
+        data_logs.pop()
+
+    # Keep the accepted record associated with the highest cloud trust.
+    # Equal scores leave the existing best record unchanged.
+    if (
+        best_edge_record is None
+        or current_trust > float(best_edge_record.get("cloud_trust", 0.0))
+    ):
+        best_edge_record = dict(accepted_record)
+
+    print(
+        f"[CLOUD ACCEPTED] {timestamp} | {edge_id} | "
+        f"trust={current_trust:.3f} | direct={direct_trust:.3f} | "
+        f"pitch={data.get('smoothed_pitch', data.get('pitch'))} | "
         f"roll={data.get('smoothed_roll', data.get('roll'))} | "
         f"anomaly={data.get('anomaly')} | reason={data.get('reason')}"
     )
