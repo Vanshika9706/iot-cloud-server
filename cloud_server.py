@@ -14,7 +14,7 @@ app = FastAPI(title="Independent Edge Trust Gatekeeper")
 HISTORY_SIZE = 10
 RHO = 0.9
 A_ADJ = 3.0
-TRUST_THRESHOLD = 0.2
+TRUST_THRESHOLD = 0.6
 ANGLE_LIMIT = 90.0
 MAX_LOGS = 500
 
